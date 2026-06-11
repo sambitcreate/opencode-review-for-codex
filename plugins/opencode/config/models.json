@@ -12,5 +12,10 @@
       "kimi-k_2_6"
     ]
   },
-  "preferred": {}
+  "preferred": {
+    "glm5.1": "opencode/glm-5.1",
+    "glm51": "opencode/glm-5.1",
+    "kimi-k.2.6": "opencode/kimi-k2.6",
+    "kimik26": "opencode/kimi-k2.6"
+  }
 }

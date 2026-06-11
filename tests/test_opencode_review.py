@@ -1,7 +1,9 @@
 import json
 import sys
 import unittest
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +49,18 @@ class ModelResolutionTests(unittest.TestCase):
         models = ["zai/glm-5.1", "other/glm-5.1"]
         self.assertEqual(review.resolve_model("glm5.1", models, config), "zai/glm-5.1")
 
+    def test_shipped_alias_preferences_resolve_local_like_models(self):
+        config = review.load_model_config(ROOT / "plugins" / "opencode" / "config" / "models.json")
+        models = [
+            "opencode/glm-5.1",
+            "opencode-go/glm-5.1",
+            "zai-coding-plan/glm-5.1",
+            "opencode/kimi-k2.6",
+            "opencode-go/kimi-k2.6",
+        ]
+        self.assertEqual(review.resolve_model("glm5.1", models, config), "opencode/glm-5.1")
+        self.assertEqual(review.resolve_model("kimi-k.2.6", models, config), "opencode/kimi-k2.6")
+
 
 class OutputParsingTests(unittest.TestCase):
     def test_extracts_text_events(self):
@@ -63,6 +77,44 @@ class OutputParsingTests(unittest.TestCase):
 
     def test_falls_back_to_plain_stdout(self):
         self.assertEqual(review.extract_review_text("plain review"), "plain review")
+
+
+class CliBoundaryTests(unittest.TestCase):
+    def test_print_command_uses_plan_agent_and_resolved_model(self):
+        stdout = StringIO()
+        with (
+            patch("opencode_review.list_models", return_value=["opencode/glm-5.1"]),
+            patch("opencode_review.shutil.which", return_value="/bin/opencode"),
+            patch("sys.stdout", stdout),
+        ):
+            code = review.main(
+                [
+                    "--cwd",
+                    str(ROOT),
+                    "--slash",
+                    "/opencode/review-glm5.1 focus on tests",
+                    "--print-command",
+                ]
+            )
+
+        self.assertEqual(code, 0)
+        command = stdout.getvalue()
+        self.assertIn("--agent plan", command)
+        self.assertIn("--model opencode/glm-5.1", command)
+        self.assertNotIn("--agent build", command)
+
+    def test_run_subprocess_timeout_is_user_facing(self):
+        with self.assertRaises(review.BridgeError) as error:
+            review.run_subprocess(
+                [
+                    sys.executable,
+                    "-c",
+                    "import time; time.sleep(2)",
+                ],
+                cwd=ROOT,
+                timeout=0.01,
+            )
+        self.assertIn("timed out", str(error.exception))
 
 
 if __name__ == "__main__":

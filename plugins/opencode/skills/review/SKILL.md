@@ -24,8 +24,9 @@ Accept these user-facing forms:
    `../../scripts/opencode-review`.
 2. Run the bridge from the repository being reviewed. Prefer passing the exact user command via
    `--slash` when the user used a slash-style command.
-3. Do not edit files as part of this review. The bridge prompt tells OpenCode to stay read-only and
-   uses OpenCode's `plan` agent by default.
+3. Do not edit files as part of this review. The bridge always uses OpenCode's `plan` agent and
+   does not expose an agent override. Treat read-only behavior as dependent on the local OpenCode
+   plan-agent and permission configuration.
 4. Relay OpenCode's findings directly. Keep findings first, ordered by severity. If OpenCode reports
    no issues, say that clearly and mention any residual risk.
 
@@ -41,7 +42,7 @@ python3 /path/to/plugins/opencode/scripts/opencode-review \
 python3 /path/to/plugins/opencode/scripts/opencode-review \
   --cwd "$PWD" \
   --model "provider/model-id" \
-  --focus "review API compatibility"
+  "review API compatibility"
 ```
 
 To list models:

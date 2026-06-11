@@ -1,6 +1,6 @@
 # Codex OpenCode Plugin
 
-Run read-only OpenCode model reviews from Codex.
+Run OpenCode model reviews from Codex using OpenCode's `plan` agent.
 
 This repository is a Codex plugin marketplace. It installs the `opencode` plugin, which adds a
 review skill and a local bridge script around `opencode run`.
@@ -56,6 +56,13 @@ Use OpenCode to review my current changes with provider/model-id.
 The bridge resolves aliases by calling `opencode models`. Exact `provider/model` IDs are preferred
 when available.
 
+## Read-Only Safety
+
+The bridge always invokes OpenCode with `--agent plan` and does not expose an agent override. It
+also prompts OpenCode to avoid edits, commits, configuration changes, and mutating shell commands.
+Actual enforcement still depends on your local OpenCode `plan` agent and permission configuration,
+so review those settings before using this on sensitive repositories.
+
 ## Model Aliases
 
 Aliases live in:
@@ -71,6 +78,15 @@ If an alias matches multiple OpenCode models, add a preferred mapping:
   "preferred": {
     "glm5.1": "provider/glm-5.1"
   }
+}
+```
+
+The shipped defaults prefer:
+
+```json
+{
+  "glm5.1": "opencode/glm-5.1",
+  "kimi-k.2.6": "opencode/kimi-k2.6"
 }
 ```
 

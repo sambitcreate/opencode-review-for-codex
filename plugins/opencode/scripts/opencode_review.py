@@ -13,12 +13,16 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Sequence
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_CONFIG = PLUGIN_ROOT / "config" / "models.json"
 DEFAULT_AGENT = "plan"
+DEFAULT_MODEL_LIST_TIMEOUT_SECONDS = 30
+DEFAULT_RUN_TIMEOUT_SECONDS = 1800
+MAX_DIAGNOSTIC_CHARS = 4000
+MAX_STDOUT_CHARS = 5_000_000
 
 
 class BridgeError(RuntimeError):
@@ -100,21 +104,48 @@ def find_opencode_command(explicit: str | None = None) -> list[str]:
     )
 
 
-def run_subprocess(command: Sequence[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        list(command),
-        cwd=str(cwd) if cwd else None,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+def truncate_text(value: str, limit: int = MAX_DIAGNOSTIC_CHARS) -> str:
+    if len(value) <= limit:
+        return value
+    omitted = len(value) - limit
+    return value[:limit].rstrip() + f"\n... truncated {omitted} characters ..."
 
 
-def list_models(opencode_command: Sequence[str], cwd: Path) -> list[str]:
-    result = run_subprocess([*opencode_command, "models"], cwd=cwd)
+def run_subprocess(
+    command: Sequence[str],
+    cwd: Path | None = None,
+    timeout: int | float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            list(command),
+            cwd=str(cwd) if cwd else None,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        rendered = shlex.join(list(command))
+        raise BridgeError(f"Command timed out after {timeout}s: {rendered}") from error
+
+
+def ensure_bounded_output(result: subprocess.CompletedProcess[str], command_name: str) -> None:
+    stdout_len = len(result.stdout or "")
+    stderr_len = len(result.stderr or "")
+    if stdout_len > MAX_STDOUT_CHARS or stderr_len > MAX_STDOUT_CHARS:
+        raise BridgeError(
+            f"`{command_name}` produced too much output "
+            f"(stdout={stdout_len} chars, stderr={stderr_len} chars)."
+        )
+
+
+def list_models(opencode_command: Sequence[str], cwd: Path, timeout: int | float) -> list[str]:
+    result = run_subprocess([*opencode_command, "models"], cwd=cwd, timeout=timeout)
+    ensure_bounded_output(result, "opencode models")
     if result.returncode != 0:
-        details = (result.stderr or result.stdout).strip()
+        details = truncate_text((result.stderr or result.stdout).strip())
         raise BridgeError(f"`opencode models` failed: {details}")
     models: list[str] = []
     for line in result.stdout.splitlines():
@@ -237,11 +268,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Parse a slash-style command such as /opencode:review-glm5.1 focus text.",
     )
     parser.add_argument("--cwd", default=os.getcwd(), help="Repository directory to review.")
-    parser.add_argument("--agent", default=DEFAULT_AGENT, help="OpenCode agent to use.")
     parser.add_argument("--variant", help="OpenCode model variant, if supported by the provider.")
     parser.add_argument("--opencode-bin", help="OpenCode executable or command string.")
     parser.add_argument("--config", default=str(DEFAULT_MODEL_CONFIG), help="Model alias config.")
     parser.add_argument("--list-models", action="store_true", help="Print OpenCode models and exit.")
+    parser.add_argument(
+        "--model-list-timeout",
+        type=float,
+        default=DEFAULT_MODEL_LIST_TIMEOUT_SECONDS,
+        help="Seconds to wait for `opencode models`.",
+    )
+    parser.add_argument(
+        "--run-timeout",
+        type=float,
+        default=DEFAULT_RUN_TIMEOUT_SECONDS,
+        help="Seconds to wait for `opencode run`.",
+    )
     parser.add_argument(
         "--skip-model-check",
         action="store_true",
@@ -268,7 +310,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             slash_focus = parsed.focus
         if args.list_models:
             command = find_opencode_command(args.opencode_bin)
-            print("\n".join(list_models(command, cwd)))
+            print("\n".join(list_models(command, cwd, args.model_list_timeout)))
             return 0
         if not model:
             parser.error("--model is required unless --slash includes a model.")
@@ -283,7 +325,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ModelResolutionError("--skip-model-check requires an exact provider/model ID.")
             resolved_model = model
         else:
-            resolved_model = resolve_model(model, list_models(opencode_command, cwd), config)
+            resolved_model = resolve_model(
+                model,
+                list_models(opencode_command, cwd, args.model_list_timeout),
+                config,
+            )
 
         review_prompt = build_review_prompt(cwd, focus)
         command = [
@@ -292,7 +338,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--dir",
             str(cwd),
             "--agent",
-            args.agent,
+            DEFAULT_AGENT,
             "--model",
             resolved_model,
             "--format",
@@ -306,9 +352,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(shlex.join(command))
             return 0
 
-        result = run_subprocess(command, cwd=cwd)
+        result = run_subprocess(command, cwd=cwd, timeout=args.run_timeout)
+        ensure_bounded_output(result, "opencode run")
         if result.returncode != 0:
-            details = (result.stderr or result.stdout).strip()
+            details = truncate_text((result.stderr or result.stdout).strip())
             raise BridgeError(f"`opencode run` failed with exit code {result.returncode}: {details}")
 
         review = extract_review_text(result.stdout)
