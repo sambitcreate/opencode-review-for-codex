@@ -1,0 +1,34 @@
+{
+  "name": "opencode",
+  "version": "0.1.0",
+  "description": "Run OpenCode model reviews from Codex.",
+  "author": {
+    "name": "Codex OpenCode Plugin Contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "opencode",
+    "review",
+    "models",
+    "code-review"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "OpenCode",
+    "shortDescription": "Review changes with any OpenCode model.",
+    "longDescription": "OpenCode adds a Codex skill and bridge script for running read-only code reviews through the local OpenCode CLI with a selected model alias or provider/model ID.",
+    "developerName": "Codex OpenCode Plugin Contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Local CLI",
+      "Code Review"
+    ],
+    "defaultPrompt": [
+      "Use OpenCode to review my changes.",
+      "Run an OpenCode review with glm5.1.",
+      "List OpenCode review models."
+    ],
+    "brandColor": "#22C55E"
+  }
+}

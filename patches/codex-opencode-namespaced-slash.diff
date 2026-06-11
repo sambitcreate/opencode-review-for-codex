@@ -1,0 +1,29 @@
+diff --git a/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs b/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
+--- a/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
++++ b/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
+@@
+ pub(super) struct SlashInput<'a> {
+@@
+ }
++
++fn is_plugin_namespaced_slash(name: &str) -> bool {
++    name.contains(':')
++}
+ 
+ impl<'a> SlashInput<'a> {
+@@
+-        if input_starts_with_space || name.contains('/') {
++        if input_starts_with_space || name.contains('/') || is_plugin_namespaced_slash(name) {
+             return SubmissionValidation::Valid;
+         }
+@@
+     pub(super) fn should_parse_on_dequeue(&self, text: &str) -> bool {
+-        self.enabled && !text.starts_with(' ') && text.trim().starts_with('/')
++        if !self.enabled || text.starts_with(' ') || !text.trim().starts_with('/') {
++            return false;
++        }
++        if let Some((name, _rest, _rest_offset)) = parse_slash_name(text) {
++            return !name.contains('/') && !is_plugin_namespaced_slash(name);
++        }
++        true
+     }

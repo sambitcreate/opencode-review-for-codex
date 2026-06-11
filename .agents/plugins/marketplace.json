@@ -1,0 +1,20 @@
+{
+  "name": "codex-opencode",
+  "interface": {
+    "displayName": "Codex OpenCode"
+  },
+  "plugins": [
+    {
+      "name": "opencode",
+      "source": {
+        "source": "local",
+        "path": "./plugins/opencode"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
