@@ -12,6 +12,24 @@ sys.path.insert(0, str(ROOT / "plugins" / "opencode" / "scripts"))
 import opencode_review as review
 
 
+OPENCODE_GO_MODELS = [
+    "opencode-go/deepseek-v4-flash",
+    "opencode-go/deepseek-v4-pro",
+    "opencode-go/glm-5",
+    "opencode-go/glm-5.1",
+    "opencode-go/kimi-k2.5",
+    "opencode-go/kimi-k2.6",
+    "opencode-go/mimo-v2.5",
+    "opencode-go/mimo-v2.5-pro",
+    "opencode-go/minimax-m2.5",
+    "opencode-go/minimax-m2.7",
+    "opencode-go/minimax-m3",
+    "opencode-go/qwen3.6-plus",
+    "opencode-go/qwen3.7-max",
+    "opencode-go/qwen3.7-plus",
+]
+
+
 class ParseSlashReviewTests(unittest.TestCase):
     def test_parse_colon_form(self):
         parsed = review.parse_slash_review("/opencode:review-glm5.1 focus on tests")
@@ -22,6 +40,13 @@ class ParseSlashReviewTests(unittest.TestCase):
         parsed = review.parse_slash_review("/opencode/review-kimi-k.2.6")
         self.assertEqual(parsed.model, "kimi-k.2.6")
         self.assertEqual(parsed.focus, "")
+
+    def test_parse_provider_model_id_form(self):
+        parsed = review.parse_slash_review(
+            "/opencode/review-google/gemini-3.1-pro-preview focus on integration risks"
+        )
+        self.assertEqual(parsed.model, "google/gemini-3.1-pro-preview")
+        self.assertEqual(parsed.focus, "focus on integration risks")
 
 
 class ModelResolutionTests(unittest.TestCase):
@@ -58,8 +83,29 @@ class ModelResolutionTests(unittest.TestCase):
             "opencode/kimi-k2.6",
             "opencode-go/kimi-k2.6",
         ]
-        self.assertEqual(review.resolve_model("glm5.1", models, config), "opencode/glm-5.1")
-        self.assertEqual(review.resolve_model("kimi-k.2.6", models, config), "opencode/kimi-k2.6")
+        self.assertEqual(review.resolve_model("glm5.1", models, config), "opencode-go/glm-5.1")
+        self.assertEqual(review.resolve_model("kimi-k.2.6", models, config), "opencode-go/kimi-k2.6")
+
+    def test_shipped_alias_preferences_cover_opencode_go_catalog(self):
+        config = review.load_model_config(ROOT / "plugins" / "opencode" / "config" / "models.json")
+        duplicated_models = [
+            f"opencode/{model.split('/', 1)[1]}"
+            for model in OPENCODE_GO_MODELS
+        ]
+        duplicated_models.extend(
+            [
+                "deepseek/deepseek-v4-flash",
+                "deepseek/deepseek-v4-pro",
+                "zai-coding-plan/glm-5.1",
+            ]
+        )
+        available = sorted([*duplicated_models, *OPENCODE_GO_MODELS])
+
+        for model in OPENCODE_GO_MODELS:
+            with self.subTest(model=model):
+                alias = model.split("/", 1)[1]
+                self.assertEqual(review.resolve_model(alias, available, config), model)
+                self.assertEqual(review.resolve_model(review.normalize_model_token(alias), available, config), model)
 
 
 class OutputParsingTests(unittest.TestCase):
