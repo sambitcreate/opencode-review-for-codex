@@ -15,8 +15,9 @@ Accept these user-facing forms:
 - `/opencode/review-<model> [focus]`
 - `Use OpenCode to review with <model> [focus]`
 
-`<model>` can be a friendly alias such as `glm5.1` or `kimi-k.2.6`, or an exact OpenCode
-`provider/model` ID when not using the slash-style command.
+`<model>` can be a friendly OpenCode Go alias such as `glm5.1`, `qwen3.7-plus`, or
+`kimi-k.2.6`, or an exact OpenCode `provider/model` ID. Exact IDs also work in slash-style
+commands, for example `/opencode/review-google/gemini-3.1-pro-preview`.
 
 ## Procedure
 
@@ -41,8 +42,21 @@ python3 /path/to/plugins/opencode/scripts/opencode-review \
 ```bash
 python3 /path/to/plugins/opencode/scripts/opencode-review \
   --cwd "$PWD" \
-  --model "provider/model-id" \
-  "review API compatibility"
+  --slash "/opencode/review-opencode-go/qwen3.7-plus focus on review coverage"
+```
+
+```bash
+python3 /path/to/plugins/opencode/scripts/opencode-review \
+  --cwd "$PWD" \
+  --model "anthropic/claude-sonnet-4-5" \
+  "review API compatibility with Claude via Anthropic"
+```
+
+```bash
+python3 /path/to/plugins/opencode/scripts/opencode-review \
+  --cwd "$PWD" \
+  --model "google/gemini-3.1-pro-preview" \
+  "review integration risks with Gemini"
 ```
 
 To list models:
