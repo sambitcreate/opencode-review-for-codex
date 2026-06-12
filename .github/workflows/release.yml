@@ -29,6 +29,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Bump, tag, and publish
@@ -71,7 +75,7 @@ jobs:
           const current = String(manifest.version || "0.0.0").split("+")[0]
 
           function parseVersion(value) {
-            const match = value.match(/^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/)
+            const match = value.match(/^(\d+)\.(\d+)\.(\d+)$/)
             if (!match) {
               throw new Error(`Expected a SemVer version like 0.2.0, got ${value}`)
             }
@@ -92,11 +96,14 @@ jobs:
 
           const parsedCurrent = parseVersion(current)
           let next
+          let changed = true
           if (requestedVersion) {
             const parsedRequested = parseVersion(requestedVersion)
-            if (compareVersions(parsedRequested, parsedCurrent) <= 0) {
-              throw new Error(`Requested version ${requestedVersion} must be greater than ${current}`)
+            const comparison = compareVersions(parsedRequested, parsedCurrent)
+            if (comparison < 0) {
+              throw new Error(`Requested version ${requestedVersion} must be greater than or equal to ${current}`)
             }
+            changed = comparison !== 0
             next = requestedVersion
           } else {
             const nextParts = { ...parsedCurrent }
@@ -120,29 +127,68 @@ jobs:
 
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${next}\n`)
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=v${next}\n`)
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `changed=${changed ? "true" : "false"}\n`)
           NODE
 
-      - name: Check release tag is new
+      - name: Check release state
+        id: release_state
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           git fetch --tags origin
-          if git rev-parse -q --verify "refs/tags/${{ steps.version.outputs.tag }}" >/dev/null; then
-            echo "Tag ${{ steps.version.outputs.tag }} already exists." >&2
+
+          tag_exists=false
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            tag_exists=true
+          fi
+
+          release_exists=false
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            release_exists=true
+          fi
+
+          if [[ "$release_exists" == "true" ]]; then
+            echo "Release $TAG already exists." >&2
             exit 1
           fi
 
+          if [[ "$tag_exists" == "true" && "${{ steps.version.outputs.changed }}" == "true" ]]; then
+            echo "Tag $TAG already exists for a different release state." >&2
+            exit 1
+          fi
+
+          if [[ "$tag_exists" == "true" ]]; then
+            tag_sha="$(git rev-list -n 1 "$TAG")"
+            head_sha="$(git rev-parse HEAD)"
+            if [[ "$tag_sha" != "$head_sha" ]]; then
+              echo "Tag $TAG exists but points to $tag_sha, not current HEAD $head_sha." >&2
+              exit 1
+            fi
+          fi
+
+          echo "tag_exists=$tag_exists" >> "$GITHUB_OUTPUT"
+
+      - name: Run tests
+        shell: bash
+        run: python3 -m unittest discover -s tests
+
+      - name: Validate plugin package
+        shell: bash
+        run: python3 scripts/validate_plugin.py plugins/opencode
+
       - name: Commit version bump
+        if: steps.version.outputs.changed == 'true'
         shell: bash
         run: |
           git add plugins/opencode/.codex-plugin/plugin.json
           git commit -m "Release ${{ steps.version.outputs.tag }}"
 
-      - name: Create and push tag
+      - name: Push version commit
+        if: steps.version.outputs.changed == 'true'
         shell: bash
-        run: |
-          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
-          git push origin "${{ steps.version.outputs.tag }}"
+        run: git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Create GitHub release
         shell: bash
@@ -152,7 +198,14 @@ jobs:
           PRERELEASE: ${{ inputs.prerelease }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
-          args=("$TAG" "--title" "$TAG" "--verify-tag")
+          release_target="$(git rev-parse HEAD)"
+          args=("$TAG" "--title" "$TAG")
+          if [[ "${{ steps.release_state.outputs.tag_exists }}" == "true" ]]; then
+            args+=("--verify-tag")
+          else
+            args+=("--target" "$release_target")
+          fi
+
           if [[ "$PRERELEASE" == "true" ]]; then
             args+=("--prerelease")
           fi

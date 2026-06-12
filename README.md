@@ -224,9 +224,16 @@ tab and choose a SemVer bump:
 - `minor`: `0.1.0` -> `0.2.0`
 - `major`: `0.1.0` -> `1.0.0`
 
-You can also provide an exact `version` such as `0.3.0`. The workflow strips local Codex
-cachebuster metadata, updates `plugins/opencode/.codex-plugin/plugin.json`, commits
-`Release vX.Y.Z`, creates tag `vX.Y.Z`, pushes it, and creates the GitHub release.
+You can also provide an exact stable `version` such as `0.3.0`. The workflow strips local Codex
+cachebuster metadata, updates `plugins/opencode/.codex-plugin/plugin.json`, runs tests and plugin
+validation, commits `Release vX.Y.Z`, pushes it, and creates the GitHub release/tag.
+
+Release runs are serialized, so two manual patch releases cannot race each other. If GitHub creates
+a tag but fails before creating the release, rerun the workflow with the exact current version to
+create the missing release without another version bump.
+
+The `prerelease` input marks the GitHub Release as a prerelease. Plugin manifest versions remain
+stable `X.Y.Z` values.
 
 The repository must allow GitHub Actions to write to contents. In GitHub, check
 `Settings -> Actions -> General -> Workflow permissions` and allow read/write if the release
@@ -243,5 +250,5 @@ python3 -m unittest discover -s tests
 Validate the plugin manifest:
 
 ```bash
-python3 /path/to/plugin-creator/scripts/validate_plugin.py plugins/opencode
+python3 scripts/validate_plugin.py plugins/opencode
 ```
