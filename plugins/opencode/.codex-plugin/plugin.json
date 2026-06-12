@@ -15,8 +15,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "OpenCode",
-    "shortDescription": "Review changes with any OpenCode model.",
-    "longDescription": "OpenCode adds a Codex skill and bridge script for running plan-agent code reviews through the local OpenCode CLI with a selected model alias or provider/model ID.",
+    "shortDescription": "Review changes with OpenCode models and optional subagents.",
+    "longDescription": "OpenCode adds a Codex skill and bridge script for running plan-agent code reviews through the local OpenCode CLI with a selected model alias or provider/model ID, plus optional 2-8 subagent review fan-out.",
     "developerName": "Codex OpenCode Plugin Contributors",
     "category": "Productivity",
     "capabilities": [
@@ -27,6 +27,7 @@
     "defaultPrompt": [
       "Use OpenCode to review my changes.",
       "Run an OpenCode review with glm5.1.",
+      "Run an OpenCode review with kimi-k.2.6 and 4 subagents.",
       "List OpenCode review models."
     ],
     "brandColor": "#22C55E"

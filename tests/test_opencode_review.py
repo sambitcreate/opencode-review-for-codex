@@ -48,6 +48,43 @@ class ParseSlashReviewTests(unittest.TestCase):
         self.assertEqual(parsed.model, "google/gemini-3.1-pro-preview")
         self.assertEqual(parsed.focus, "focus on integration risks")
 
+    def test_parse_slash_subagents_option(self):
+        parsed = review.parse_slash_review(
+            "/opencode/review-glm5.1 --subagents 4 focus on risky migrations"
+        )
+        self.assertEqual(parsed.model, "glm5.1")
+        self.assertEqual(parsed.subagents, 4)
+        self.assertEqual(parsed.focus, "focus on risky migrations")
+
+
+class SubagentOptionTests(unittest.TestCase):
+    def test_parse_natural_subagent_option(self):
+        options = review.parse_review_options("focus on auth with 6 subagents")
+        self.assertEqual(options.subagents, 6)
+        self.assertEqual(options.focus, "focus on auth")
+
+    def test_parse_subagent_option_with_punctuation(self):
+        options = review.parse_review_options("subagents=4, focus on auth and edge cases")
+        self.assertEqual(options.subagents, 4)
+        self.assertEqual(options.focus, "focus on auth and edge cases")
+
+    def test_rejects_subagent_count_outside_range(self):
+        with self.assertRaises(review.BridgeError):
+            review.parse_review_options("focus on auth with 9 subagents")
+
+    def test_rejects_conflicting_subagent_counts(self):
+        with self.assertRaises(review.BridgeError):
+            review.parse_review_options("--subagents 3 focus on auth with 4 subagents")
+
+    def test_review_prompt_includes_subagent_instructions_when_requested(self):
+        prompt = review.build_review_prompt(ROOT, "focus on tests", subagents=3)
+        self.assertIn("launch exactly 3 fresh `explore` subagents", prompt)
+        self.assertIn("focus on tests", prompt)
+
+    def test_review_prompt_omits_subagent_instructions_by_default(self):
+        prompt = review.build_review_prompt(ROOT, "focus on tests")
+        self.assertNotIn("OpenCode subagent fan-out", prompt)
+
 
 class ModelResolutionTests(unittest.TestCase):
     def test_exact_provider_model_wins(self):
@@ -148,6 +185,30 @@ class CliBoundaryTests(unittest.TestCase):
         self.assertIn("--agent plan", command)
         self.assertIn("--model opencode/glm-5.1", command)
         self.assertNotIn("--agent build", command)
+
+    def test_print_command_accepts_subagents_option(self):
+        stdout = StringIO()
+        with (
+            patch("opencode_review.list_models", return_value=["opencode/glm-5.1"]),
+            patch("opencode_review.shutil.which", return_value="/bin/opencode"),
+            patch("sys.stdout", stdout),
+        ):
+            code = review.main(
+                [
+                    "--cwd",
+                    str(ROOT),
+                    "--slash",
+                    "/opencode/review-glm5.1 focus on tests",
+                    "--subagents",
+                    "4",
+                    "--print-command",
+                ]
+            )
+
+        self.assertEqual(code, 0)
+        command = stdout.getvalue()
+        self.assertIn("--agent plan", command)
+        self.assertIn("launch exactly 4 fresh `explore` subagents", command)
 
     def test_run_subprocess_timeout_is_user_facing(self):
         with self.assertRaises(review.BridgeError) as error:

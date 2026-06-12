@@ -21,9 +21,12 @@ from typing import BinaryIO, Sequence
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_CONFIG = PLUGIN_ROOT / "config" / "models.json"
 DEFAULT_AGENT = "plan"
+DEFAULT_REVIEW_SUBAGENT = "explore"
 DEFAULT_MODEL_LIST_TIMEOUT_SECONDS = 30
 DEFAULT_RUN_TIMEOUT_SECONDS = 1800
 DEFAULT_PROGRESS_INTERVAL_SECONDS = 30
+MIN_REVIEW_SUBAGENTS = 2
+MAX_REVIEW_SUBAGENTS = 8
 MAX_DIAGNOSTIC_CHARS = 4000
 MAX_OUTPUT_BYTES = 5_000_000
 
@@ -40,6 +43,13 @@ class ModelResolutionError(BridgeError):
 class SlashReviewRequest:
     model: str
     focus: str
+    subagents: int | None
+
+
+@dataclass(frozen=True)
+class ReviewOptions:
+    focus: str
+    subagents: int | None
 
 
 @dataclass(frozen=True)
@@ -52,6 +62,62 @@ def normalize_model_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
+def validate_subagent_count(value: int | str) -> int:
+    try:
+        count = int(value)
+    except (TypeError, ValueError) as error:
+        raise BridgeError(
+            f"Subagent count must be an integer from {MIN_REVIEW_SUBAGENTS} to "
+            f"{MAX_REVIEW_SUBAGENTS}."
+        ) from error
+    if count < MIN_REVIEW_SUBAGENTS or count > MAX_REVIEW_SUBAGENTS:
+        raise BridgeError(
+            f"Subagent count must be between {MIN_REVIEW_SUBAGENTS} and "
+            f"{MAX_REVIEW_SUBAGENTS}; got {count}."
+        )
+    return count
+
+
+def merge_subagent_counts(*counts: int | None) -> int | None:
+    requested = [count for count in counts if count is not None]
+    if not requested:
+        return None
+    unique = sorted(set(requested))
+    if len(unique) > 1:
+        rendered = ", ".join(str(count) for count in unique)
+        raise BridgeError(f"Conflicting subagent counts were requested: {rendered}.")
+    return requested[0]
+
+
+def parse_review_options(value: str) -> ReviewOptions:
+    text = value.strip()
+    subagents: int | None = None
+
+    patterns = [
+        re.compile(r"(?P<prefix>^|\s)--subagents(?:=|\s+)(?P<count>\d+)(?=$|[\s,.;])", re.I),
+        re.compile(r"(?P<prefix>^|\s)subagents?\s*[:=]\s*(?P<count>\d+)(?=$|[\s,.;])", re.I),
+        re.compile(
+            r"(?P<prefix>^|\s)(?:use|using|spawn|spawning|with|and)\s+"
+            r"(?P<count>\d+)\s+subagents?\b",
+            re.I,
+        ),
+        re.compile(r"(?P<prefix>^|\s)subagents?\s+(?P<count>\d+)\b", re.I),
+        re.compile(r"(?P<prefix>^|\s)(?P<count>\d+)\s+subagents?\b", re.I),
+    ]
+
+    def replace_directive(match: re.Match[str]) -> str:
+        nonlocal subagents
+        count = validate_subagent_count(match.group("count"))
+        subagents = merge_subagent_counts(subagents, count)
+        return match.group("prefix")
+
+    for pattern in patterns:
+        text = pattern.sub(replace_directive, text)
+
+    focus = re.sub(r"\s+", " ", text).strip(" ,;.")
+    return ReviewOptions(focus=focus, subagents=subagents)
+
+
 def parse_slash_review(value: str) -> SlashReviewRequest:
     text = value.strip()
     match = re.match(r"^/opencode(?::|/)review-([^\s]+)(?:\s+(.*))?$", text, re.DOTALL)
@@ -59,7 +125,12 @@ def parse_slash_review(value: str) -> SlashReviewRequest:
         raise BridgeError(
             "Expected /opencode:review-<model> or /opencode/review-<model>."
         )
-    return SlashReviewRequest(model=match.group(1), focus=(match.group(2) or "").strip())
+    options = parse_review_options(match.group(2) or "")
+    return SlashReviewRequest(
+        model=match.group(1),
+        focus=options.focus,
+        subagents=options.subagents,
+    )
 
 
 def load_model_config(path: Path = DEFAULT_MODEL_CONFIG) -> ModelConfig:
@@ -296,8 +367,25 @@ def resolve_model(requested: str, available: Sequence[str], config: ModelConfig)
     )
 
 
-def build_review_prompt(cwd: Path, focus: str) -> str:
+def build_review_prompt(cwd: Path, focus: str, subagents: int | None = None) -> str:
     focus_block = f"\n\nAdditional review focus:\n{focus.strip()}" if focus.strip() else ""
+    subagent_block = ""
+    if subagents is not None:
+        subagent_block = (
+            "\n\nOpenCode subagent fan-out:\n"
+            f"- Before finalizing, launch exactly {subagents} fresh "
+            f"`{DEFAULT_REVIEW_SUBAGENT}` subagents concurrently with the task tool.\n"
+            "- Give each subagent a complete, self-contained, non-mutating review prompt "
+            "that includes the repository path, the user's focus, and a distinct review lens.\n"
+            "- Use the first N review lenses from this list: correctness/regressions, "
+            "security/data-loss, concurrency/state, API/contracts, tests/coverage, "
+            "edge cases/config, dependencies/build/release, docs/user impact.\n"
+            "- Wait for all subagent results, then deduplicate and verify material claims "
+            "against the working tree before reporting findings.\n"
+            f"- If the task tool or `{DEFAULT_REVIEW_SUBAGENT}` subagent is unavailable "
+            "or permission-denied, continue the review yourself and mention that limitation "
+            "in the residual-risk note."
+        )
     return (
         "You are performing a code review for the current git working tree.\n"
         f"Repository: {cwd}\n\n"
@@ -309,6 +397,7 @@ def build_review_prompt(cwd: Path, focus: str) -> str:
         "Return findings first, sorted by severity. Use file:line references when "
         "possible. After findings, include open questions and a brief residual-risk "
         "or test-coverage note. If no issues are found, say that clearly."
+        f"{subagent_block}"
         f"{focus_block}"
     )
 
@@ -371,6 +460,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seconds between review progress heartbeats on stderr. Use 0 to disable.",
     )
     parser.add_argument(
+        "--subagents",
+        type=int,
+        metavar="N",
+        help="Ask OpenCode to fan out the review through N fresh explore subagents (2-8).",
+    )
+    parser.add_argument(
         "--skip-model-check",
         action="store_true",
         help="Pass an exact provider/model through without calling `opencode models`.",
@@ -391,11 +486,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         slash_focus = ""
+        slash_subagents: int | None = None
         model = args.model
         if args.slash:
             parsed = parse_slash_review(args.slash)
             model = model or parsed.model
             slash_focus = parsed.focus
+            slash_subagents = parsed.subagents
         if args.list_models:
             command = find_opencode_command(args.opencode_bin)
             print("\n".join(list_models(command, cwd, args.model_list_timeout)))
@@ -404,7 +501,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error("--model is required unless --slash includes a model.")
 
         focus_parts = [slash_focus, *args.focus]
-        focus = " ".join(part for part in focus_parts if part).strip()
+        parsed_options = parse_review_options(" ".join(part for part in focus_parts if part).strip())
+        cli_subagents = (
+            validate_subagent_count(args.subagents) if args.subagents is not None else None
+        )
+        subagents = merge_subagent_counts(cli_subagents, slash_subagents, parsed_options.subagents)
+        focus = parsed_options.focus
         opencode_command = find_opencode_command(args.opencode_bin)
         config = load_model_config(Path(args.config).expanduser().resolve())
 
@@ -419,7 +521,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config,
             )
 
-        review_prompt = build_review_prompt(cwd, focus)
+        review_prompt = build_review_prompt(cwd, focus, subagents)
         command = [
             *opencode_command,
             "run",
@@ -444,7 +546,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             command,
             cwd=cwd,
             timeout=args.run_timeout,
-            progress_label=f"OpenCode review in progress with {resolved_model}",
+            progress_label=(
+                f"OpenCode review in progress with {resolved_model}"
+                + (f" using {subagents} subagents" if subagents is not None else "")
+            ),
             progress_interval=args.progress_interval,
         )
         ensure_bounded_output(result, "opencode run")

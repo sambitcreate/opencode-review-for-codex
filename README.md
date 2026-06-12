@@ -5,7 +5,8 @@
 Run OpenCode model reviews from Codex using OpenCode's `plan` agent.
 
 This repository is a Codex plugin marketplace. It installs the `opencode` plugin, which adds a
-review skill and a local bridge script around `opencode run`.
+review skill and a local bridge script around `opencode run`, with optional OpenCode subagent
+fan-out for broader reviews.
 
 ## Install
 
@@ -41,6 +42,7 @@ Today, this form works without patching Codex slash validation:
 ```text
 /opencode/review-glm5.1 focus on regressions
 /opencode/review-qwen3.7-plus focus on review coverage
+/opencode/review-kimi-k.2.6 with 4 subagents focus on release risk
 ```
 
 After applying the optional Codex patch, the colon form also works:
@@ -48,6 +50,7 @@ After applying the optional Codex patch, the colon form also works:
 ```text
 /opencode:review-glm5.1
 /opencode:review-kimi-k.2.6 focus on security and missing tests
+/opencode:review-glm5.1 --subagents 6 focus on edge cases
 /opencode:review-opencode-go/deepseek-v4-pro focus on correctness
 ```
 
@@ -59,6 +62,23 @@ Use OpenCode to review my current changes with provider/model-id.
 
 The bridge resolves aliases by calling `opencode models`. Exact `provider/model` IDs are preferred
 when available.
+
+## OpenCode Subagents
+
+For wider reviews, ask OpenCode to fan out through 2 to 8 fresh subagents:
+
+```text
+/opencode/review-glm5.1 --subagents 4 focus on auth and data loss
+/opencode/review-kimi-k.2.6 with 6 subagents focus on release safety
+```
+
+The bridge keeps `--agent plan` and adds review-prompt instructions for OpenCode to launch the
+requested number of fresh `explore` subagents concurrently through its `task` tool. Each subagent
+gets a distinct read-only review lens, and the main OpenCode review deduplicates and verifies the
+results before returning findings.
+
+The range is intentionally limited to 2 through 8. Omit the option for the original single-agent
+review behavior.
 
 ## OpenCode Go Models
 
@@ -197,6 +217,7 @@ Print the OpenCode command without running it:
 python3 plugins/opencode/scripts/opencode-review \
   --cwd "$PWD" \
   --model provider/model-id \
+  --subagents 4 \
   --skip-model-check \
   --print-command
 ```
