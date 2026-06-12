@@ -1,21 +1,103 @@
 {
   "aliases": {
+    "deepseek-v4-flash": [
+      "deepseek-v4-flash",
+      "deepseekv4flash"
+    ],
+    "deepseek-v4-pro": [
+      "deepseek-v4-pro",
+      "deepseekv4pro"
+    ],
+    "glm5": [
+      "glm5",
+      "glm-5",
+      "glm_5"
+    ],
     "glm5.1": [
       "glm5.1",
       "glm-5.1",
       "glm_5_1"
+    ],
+    "kimi-k.2.5": [
+      "kimi-k.2.5",
+      "kimi-k2.5",
+      "kimi-k-2.5",
+      "kimi-k_2_5"
     ],
     "kimi-k.2.6": [
       "kimi-k.2.6",
       "kimi-k2.6",
       "kimi-k-2.6",
       "kimi-k_2_6"
+    ],
+    "mimo-v2.5": [
+      "mimo-v2.5",
+      "mimo-v2-5",
+      "mimov25"
+    ],
+    "mimo-v2.5-pro": [
+      "mimo-v2.5-pro",
+      "mimo-v2-5-pro",
+      "mimov25pro"
+    ],
+    "minimax-m2.5": [
+      "minimax-m2.5",
+      "minimax-m2-5",
+      "minimaxm25"
+    ],
+    "minimax-m2.7": [
+      "minimax-m2.7",
+      "minimax-m2-7",
+      "minimaxm27"
+    ],
+    "minimax-m3": [
+      "minimax-m3",
+      "minimaxm3"
+    ],
+    "qwen3.6-plus": [
+      "qwen3.6-plus",
+      "qwen3-6-plus",
+      "qwen36plus"
+    ],
+    "qwen3.7-max": [
+      "qwen3.7-max",
+      "qwen3-7-max",
+      "qwen37max"
+    ],
+    "qwen3.7-plus": [
+      "qwen3.7-plus",
+      "qwen3-7-plus",
+      "qwen37plus"
     ]
   },
   "preferred": {
-    "glm5.1": "opencode/glm-5.1",
-    "glm51": "opencode/glm-5.1",
-    "kimi-k.2.6": "opencode/kimi-k2.6",
-    "kimik26": "opencode/kimi-k2.6"
+    "deepseek-v4-flash": "opencode-go/deepseek-v4-flash",
+    "deepseekv4flash": "opencode-go/deepseek-v4-flash",
+    "deepseek-v4-pro": "opencode-go/deepseek-v4-pro",
+    "deepseekv4pro": "opencode-go/deepseek-v4-pro",
+    "glm5": "opencode-go/glm-5",
+    "glm-5": "opencode-go/glm-5",
+    "glm5.1": "opencode-go/glm-5.1",
+    "glm51": "opencode-go/glm-5.1",
+    "kimi-k.2.5": "opencode-go/kimi-k2.5",
+    "kimik25": "opencode-go/kimi-k2.5",
+    "kimi-k.2.6": "opencode-go/kimi-k2.6",
+    "kimik26": "opencode-go/kimi-k2.6",
+    "mimo-v2.5": "opencode-go/mimo-v2.5",
+    "mimov25": "opencode-go/mimo-v2.5",
+    "mimo-v2.5-pro": "opencode-go/mimo-v2.5-pro",
+    "mimov25pro": "opencode-go/mimo-v2.5-pro",
+    "minimax-m2.5": "opencode-go/minimax-m2.5",
+    "minimaxm25": "opencode-go/minimax-m2.5",
+    "minimax-m2.7": "opencode-go/minimax-m2.7",
+    "minimaxm27": "opencode-go/minimax-m2.7",
+    "minimax-m3": "opencode-go/minimax-m3",
+    "minimaxm3": "opencode-go/minimax-m3",
+    "qwen3.6-plus": "opencode-go/qwen3.6-plus",
+    "qwen36plus": "opencode-go/qwen3.6-plus",
+    "qwen3.7-max": "opencode-go/qwen3.7-max",
+    "qwen37max": "opencode-go/qwen3.7-max",
+    "qwen3.7-plus": "opencode-go/qwen3.7-plus",
+    "qwen37plus": "opencode-go/qwen3.7-plus"
   }
 }
