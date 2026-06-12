@@ -23,6 +23,7 @@ DEFAULT_MODEL_CONFIG = PLUGIN_ROOT / "config" / "models.json"
 DEFAULT_AGENT = "plan"
 DEFAULT_MODEL_LIST_TIMEOUT_SECONDS = 30
 DEFAULT_RUN_TIMEOUT_SECONDS = 1800
+DEFAULT_PROGRESS_INTERVAL_SECONDS = 30
 MAX_DIAGNOSTIC_CHARS = 4000
 MAX_OUTPUT_BYTES = 5_000_000
 
@@ -113,14 +114,37 @@ def truncate_text(value: str, limit: int = MAX_DIAGNOSTIC_CHARS) -> str:
     return value[:limit].rstrip() + f"\n... truncated {omitted} characters ..."
 
 
+def format_duration(seconds: float) -> str:
+    total = max(0, int(seconds))
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def format_bytes(size: int) -> str:
+    if size < 1024:
+        return f"{size}B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f}KB"
+    return f"{size / (1024 * 1024):.1f}MB"
+
+
 def run_subprocess(
     command: Sequence[str],
     cwd: Path | None = None,
     timeout: int | float | None = None,
+    progress_label: str | None = None,
+    progress_interval: int | float = 0,
 ) -> subprocess.CompletedProcess[str]:
     rendered = shlex.join(list(command))
+    started_at = time.monotonic()
     deadline = time.monotonic() + timeout if timeout else None
     poll_interval_seconds = 0.05
+    next_progress_at = started_at + progress_interval if progress_label and progress_interval > 0 else None
 
     def read_output(handle: BinaryIO) -> str:
         handle.seek(0)
@@ -146,6 +170,9 @@ def run_subprocess(
         except OSError as error:
             raise BridgeError(f"Failed to start command: {rendered}: {error}") from error
 
+        if progress_label and progress_interval > 0:
+            print(f"opencode-review: {progress_label} started.", file=sys.stderr, flush=True)
+
         while True:
             stdout_len = output_size(stdout_file)
             stderr_len = output_size(stderr_file)
@@ -168,6 +195,17 @@ def run_subprocess(
             if deadline is not None and time.monotonic() >= deadline:
                 stop_process(process)
                 raise BridgeError(f"Command timed out after {timeout}s: {rendered}")
+
+            now = time.monotonic()
+            if next_progress_at is not None and now >= next_progress_at:
+                elapsed = format_duration(now - started_at)
+                print(
+                    f"opencode-review: {progress_label}; still running after {elapsed} "
+                    f"(stdout={format_bytes(stdout_len)}, stderr={format_bytes(stderr_len)}).",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                next_progress_at = now + progress_interval
 
             time.sleep(poll_interval_seconds)
 
@@ -327,6 +365,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seconds to wait for `opencode run`.",
     )
     parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+        help="Seconds between review progress heartbeats on stderr. Use 0 to disable.",
+    )
+    parser.add_argument(
         "--skip-model-check",
         action="store_true",
         help="Pass an exact provider/model through without calling `opencode models`.",
@@ -396,7 +440,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(shlex.join(command))
             return 0
 
-        result = run_subprocess(command, cwd=cwd, timeout=args.run_timeout)
+        result = run_subprocess(
+            command,
+            cwd=cwd,
+            timeout=args.run_timeout,
+            progress_label=f"OpenCode review in progress with {resolved_model}",
+            progress_interval=args.progress_interval,
+        )
         ensure_bounded_output(result, "opencode run")
         if result.returncode != 0:
             details = truncate_text((result.stderr or result.stdout).strip())

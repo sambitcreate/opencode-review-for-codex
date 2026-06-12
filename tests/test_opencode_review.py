@@ -185,6 +185,26 @@ class CliBoundaryTests(unittest.TestCase):
                 )
         self.assertIn("too much output", str(error.exception))
 
+    def test_run_subprocess_emits_progress_heartbeats(self):
+        stderr = StringIO()
+        with patch("sys.stderr", stderr):
+            result = review.run_subprocess(
+                [
+                    sys.executable,
+                    "-c",
+                    "import time; time.sleep(0.12); print('done')",
+                ],
+                cwd=ROOT,
+                timeout=2,
+                progress_label="OpenCode review in progress with test/model",
+                progress_interval=0.05,
+            )
+
+        self.assertEqual(result.stdout.strip(), "done")
+        progress = stderr.getvalue()
+        self.assertIn("started", progress)
+        self.assertIn("still running after", progress)
+
     def test_cwd_must_be_directory(self):
         stderr = StringIO()
         with patch("sys.stderr", stderr):

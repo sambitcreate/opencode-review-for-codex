@@ -28,7 +28,10 @@ commands, for example `/opencode/review-google/gemini-3.1-pro-preview`.
 3. Do not edit files as part of this review. The bridge always uses OpenCode's `plan` agent and
    does not expose an agent override. Treat non-mutating behavior as dependent on the local OpenCode
    plan-agent and permission configuration.
-4. Relay OpenCode's findings directly. Keep findings first, ordered by severity. If OpenCode reports
+4. Leave progress heartbeats enabled unless the user asks for quiet mode. The bridge writes
+   heartbeat lines to stderr while OpenCode is still running, so Codex command output stays visibly
+   active without mixing those lines into the final review text.
+5. Relay OpenCode's findings directly. Keep findings first, ordered by severity. If OpenCode reports
    no issues, say that clearly and mention any residual risk.
 
 ## Examples
@@ -42,7 +45,8 @@ python3 /path/to/plugins/opencode/scripts/opencode-review \
 ```bash
 python3 /path/to/plugins/opencode/scripts/opencode-review \
   --cwd "$PWD" \
-  --slash "/opencode/review-opencode-go/qwen3.7-plus focus on review coverage"
+  --slash "/opencode/review-opencode-go/qwen3.7-plus focus on review coverage" \
+  --progress-interval 15
 ```
 
 ```bash

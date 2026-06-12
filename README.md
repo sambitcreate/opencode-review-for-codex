@@ -116,6 +116,30 @@ python3 plugins/opencode/scripts/opencode-review \
 If you have a local custom model ID that OpenCode can run but does not list, use
 `--skip-model-check` with the direct script form.
 
+## Progress Heartbeats
+
+Model-backed reviews can be quiet until OpenCode finishes. The bridge prints progress heartbeats to
+stderr so Codex has visible command output while the review is still running. Review text still goes
+to stdout only after OpenCode returns.
+
+By default, the bridge emits a heartbeat every 30 seconds:
+
+```text
+opencode-review: OpenCode review in progress with opencode-go/kimi-k2.6 started.
+opencode-review: OpenCode review in progress with opencode-go/kimi-k2.6; still running after 1m 0s (stdout=0B, stderr=0B).
+```
+
+Tune or disable heartbeats with:
+
+```bash
+python3 plugins/opencode/scripts/opencode-review \
+  --cwd "$PWD" \
+  --slash "/opencode/review-kimi-k.2.6 focus on the latest fix" \
+  --progress-interval 15
+```
+
+Use `--progress-interval 0` for quiet mode.
+
 ## Non-Mutating Review Requests
 
 The bridge always invokes OpenCode with `--agent plan` and does not expose an agent override. It
