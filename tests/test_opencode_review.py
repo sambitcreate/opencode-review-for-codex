@@ -116,6 +116,46 @@ class CliBoundaryTests(unittest.TestCase):
             )
         self.assertIn("timed out", str(error.exception))
 
+    def test_run_subprocess_start_failure_is_user_facing(self):
+        with self.assertRaises(review.BridgeError) as error:
+            review.run_subprocess(
+                ["/definitely/not/opencode"],
+                cwd=ROOT,
+                timeout=1,
+            )
+        self.assertIn("Failed to start command", str(error.exception))
+
+    def test_run_subprocess_limits_output_before_returning(self):
+        with patch("opencode_review.MAX_OUTPUT_BYTES", 64):
+            with self.assertRaises(review.BridgeError) as error:
+                review.run_subprocess(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import sys; sys.stdout.write('x' * 1024); sys.stdout.flush()",
+                    ],
+                    cwd=ROOT,
+                    timeout=2,
+                )
+        self.assertIn("too much output", str(error.exception))
+
+    def test_cwd_must_be_directory(self):
+        stderr = StringIO()
+        with patch("sys.stderr", stderr):
+            with self.assertRaises(SystemExit) as error:
+                review.main(
+                    [
+                        "--cwd",
+                        str(ROOT / "README.md"),
+                        "--model",
+                        "opencode/glm-5.1",
+                        "--skip-model-check",
+                        "--print-command",
+                    ]
+                )
+        self.assertEqual(error.exception.code, 2)
+        self.assertIn("--cwd must be a directory", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

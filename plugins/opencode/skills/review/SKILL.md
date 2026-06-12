@@ -1,11 +1,11 @@
 ---
 name: review
-description: Run read-only OpenCode code reviews from Codex with a selected model alias or provider/model ID. Use when the user mentions OpenCode review, opencode review, /opencode:review-*, /opencode/review-*, review-glm, review-kimi, or asks to review current changes using an OpenCode model.
+description: Run OpenCode plan-agent code reviews from Codex with a selected model alias or provider/model ID. Use when the user mentions OpenCode review, opencode review, /opencode:review-*, /opencode/review-*, review-glm, review-kimi, or asks to review current changes using an OpenCode model.
 ---
 
 # OpenCode Review
 
-Use this skill to delegate a read-only code review to the local OpenCode CLI.
+Use this skill to delegate a non-mutating review request to the local OpenCode CLI.
 
 ## Command Forms
 
@@ -25,7 +25,7 @@ Accept these user-facing forms:
 2. Run the bridge from the repository being reviewed. Prefer passing the exact user command via
    `--slash` when the user used a slash-style command.
 3. Do not edit files as part of this review. The bridge always uses OpenCode's `plan` agent and
-   does not expose an agent override. Treat read-only behavior as dependent on the local OpenCode
+   does not expose an agent override. Treat non-mutating behavior as dependent on the local OpenCode
    plan-agent and permission configuration.
 4. Relay OpenCode's findings directly. Keep findings first, ordered by severity. If OpenCode reports
    no issues, say that clearly and mention any residual risk.

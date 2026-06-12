@@ -56,7 +56,7 @@ Use OpenCode to review my current changes with provider/model-id.
 The bridge resolves aliases by calling `opencode models`. Exact `provider/model` IDs are preferred
 when available.
 
-## Read-Only Safety
+## Non-Mutating Review Requests
 
 The bridge always invokes OpenCode with `--agent plan` and does not expose an agent override. It
 also prompts OpenCode to avoid edits, commits, configuration changes, and mutating shell commands.

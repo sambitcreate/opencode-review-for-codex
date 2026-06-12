@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a read-only OpenCode review from a Codex plugin skill."""
+"""Run an OpenCode plan-agent review from a Codex plugin skill."""
 
 from __future__ import annotations
 
@@ -11,9 +11,11 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import BinaryIO, Sequence
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
@@ -22,7 +24,7 @@ DEFAULT_AGENT = "plan"
 DEFAULT_MODEL_LIST_TIMEOUT_SECONDS = 30
 DEFAULT_RUN_TIMEOUT_SECONDS = 1800
 MAX_DIAGNOSTIC_CHARS = 4000
-MAX_STDOUT_CHARS = 5_000_000
+MAX_OUTPUT_BYTES = 5_000_000
 
 
 class BridgeError(RuntimeError):
@@ -116,28 +118,67 @@ def run_subprocess(
     cwd: Path | None = None,
     timeout: int | float | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(
-            list(command),
-            cwd=str(cwd) if cwd else None,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as error:
-        rendered = shlex.join(list(command))
-        raise BridgeError(f"Command timed out after {timeout}s: {rendered}") from error
+    rendered = shlex.join(list(command))
+    deadline = time.monotonic() + timeout if timeout else None
+    poll_interval_seconds = 0.05
+
+    def read_output(handle: BinaryIO) -> str:
+        handle.seek(0)
+        return handle.read(MAX_OUTPUT_BYTES).decode("utf-8", errors="replace")
+
+    def output_size(handle: BinaryIO) -> int:
+        return os.fstat(handle.fileno()).st_size
+
+    def stop_process(process: subprocess.Popen) -> None:
+        if process.poll() is not None:
+            return
+        process.kill()
+        process.wait()
+
+    with tempfile.TemporaryFile("w+b") as stdout_file, tempfile.TemporaryFile("w+b") as stderr_file:
+        try:
+            process = subprocess.Popen(
+                list(command),
+                cwd=str(cwd) if cwd else None,
+                stdout=stdout_file,
+                stderr=stderr_file,
+            )
+        except OSError as error:
+            raise BridgeError(f"Failed to start command: {rendered}: {error}") from error
+
+        while True:
+            stdout_len = output_size(stdout_file)
+            stderr_len = output_size(stderr_file)
+            if stdout_len > MAX_OUTPUT_BYTES or stderr_len > MAX_OUTPUT_BYTES:
+                stop_process(process)
+                raise BridgeError(
+                    "Command produced too much output "
+                    f"(stdout={stdout_len} bytes, stderr={stderr_len} bytes): {rendered}"
+                )
+
+            returncode = process.poll()
+            if returncode is not None:
+                return subprocess.CompletedProcess(
+                    list(command),
+                    returncode,
+                    stdout=read_output(stdout_file),
+                    stderr=read_output(stderr_file),
+                )
+
+            if deadline is not None and time.monotonic() >= deadline:
+                stop_process(process)
+                raise BridgeError(f"Command timed out after {timeout}s: {rendered}")
+
+            time.sleep(poll_interval_seconds)
 
 
 def ensure_bounded_output(result: subprocess.CompletedProcess[str], command_name: str) -> None:
-    stdout_len = len(result.stdout or "")
-    stderr_len = len(result.stderr or "")
-    if stdout_len > MAX_STDOUT_CHARS or stderr_len > MAX_STDOUT_CHARS:
+    stdout_len = len((result.stdout or "").encode("utf-8"))
+    stderr_len = len((result.stderr or "").encode("utf-8"))
+    if stdout_len > MAX_OUTPUT_BYTES or stderr_len > MAX_OUTPUT_BYTES:
         raise BridgeError(
             f"`{command_name}` produced too much output "
-            f"(stdout={stdout_len} chars, stderr={stderr_len} chars)."
+            f"(stdout={stdout_len} bytes, stderr={stderr_len} bytes)."
         )
 
 
@@ -220,10 +261,11 @@ def resolve_model(requested: str, available: Sequence[str], config: ModelConfig)
 def build_review_prompt(cwd: Path, focus: str) -> str:
     focus_block = f"\n\nAdditional review focus:\n{focus.strip()}" if focus.strip() else ""
     return (
-        "You are performing a read-only code review for the current git working tree.\n"
+        "You are performing a code review for the current git working tree.\n"
         f"Repository: {cwd}\n\n"
-        "Inspect staged and unstaged changes relative to HEAD. Do not edit files, "
-        "create commits, change configuration, or run mutating commands. Prioritize "
+        "Inspect staged and unstaged changes relative to HEAD. Treat this as a "
+        "non-mutating task: do not edit files, create commits, change configuration, "
+        "or run mutating commands. Prioritize "
         "correctness bugs, regressions, security/data-loss risks, race conditions, "
         "API compatibility, and missing tests.\n\n"
         "Return findings first, sorted by severity. Use file:line references when "
@@ -260,7 +302,7 @@ def extract_review_text(stdout: str) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run an OpenCode read-only review with a selected model."
+        description="Run an OpenCode review with the plan agent and a selected model."
     )
     parser.add_argument("--model", help="Model alias or exact provider/model ID.")
     parser.add_argument(
@@ -300,6 +342,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     cwd = Path(args.cwd).expanduser().resolve()
     if not cwd.exists():
         parser.error(f"--cwd does not exist: {cwd}")
+    if not cwd.is_dir():
+        parser.error(f"--cwd must be a directory: {cwd}")
 
     try:
         slash_focus = ""

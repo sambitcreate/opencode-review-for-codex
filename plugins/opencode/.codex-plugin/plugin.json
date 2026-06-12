@@ -16,7 +16,7 @@
   "interface": {
     "displayName": "OpenCode",
     "shortDescription": "Review changes with any OpenCode model.",
-    "longDescription": "OpenCode adds a Codex skill and bridge script for running read-only code reviews through the local OpenCode CLI with a selected model alias or provider/model ID.",
+    "longDescription": "OpenCode adds a Codex skill and bridge script for running plan-agent code reviews through the local OpenCode CLI with a selected model alias or provider/model ID.",
     "developerName": "Codex OpenCode Plugin Contributors",
     "category": "Productivity",
     "capabilities": [
