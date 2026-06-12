@@ -38,6 +38,7 @@ Today, this form works without patching Codex slash validation:
 
 ```text
 /opencode/review-glm5.1 focus on regressions
+/opencode/review-qwen3.7-plus focus on review coverage
 ```
 
 After applying the optional Codex patch, the colon form also works:
@@ -45,6 +46,7 @@ After applying the optional Codex patch, the colon form also works:
 ```text
 /opencode:review-glm5.1
 /opencode:review-kimi-k.2.6 focus on security and missing tests
+/opencode:review-opencode-go/deepseek-v4-pro focus on correctness
 ```
 
 You can also ask naturally:
@@ -55,6 +57,64 @@ Use OpenCode to review my current changes with provider/model-id.
 
 The bridge resolves aliases by calling `opencode models`. Exact `provider/model` IDs are preferred
 when available.
+
+## OpenCode Go Models
+
+The shipped aliases prefer OpenCode Go model IDs. The current Go set is:
+
+```text
+deepseek-v4-flash -> opencode-go/deepseek-v4-flash
+deepseek-v4-pro   -> opencode-go/deepseek-v4-pro
+glm5              -> opencode-go/glm-5
+glm5.1            -> opencode-go/glm-5.1
+kimi-k.2.5        -> opencode-go/kimi-k2.5
+kimi-k.2.6        -> opencode-go/kimi-k2.6
+mimo-v2.5         -> opencode-go/mimo-v2.5
+mimo-v2.5-pro     -> opencode-go/mimo-v2.5-pro
+minimax-m2.5      -> opencode-go/minimax-m2.5
+minimax-m2.7      -> opencode-go/minimax-m2.7
+minimax-m3        -> opencode-go/minimax-m3
+qwen3.6-plus      -> opencode-go/qwen3.6-plus
+qwen3.7-max       -> opencode-go/qwen3.7-max
+qwen3.7-plus      -> opencode-go/qwen3.7-plus
+```
+
+You can always type the exact OpenCode Go ID yourself:
+
+```text
+/opencode/review-opencode-go/qwen3.7-max focus on architecture risks
+```
+
+## Custom Provider Models
+
+Custom/provider-owned models do not need plugin aliases. Connect or configure the provider in
+OpenCode, confirm the model appears in `opencode models`, then type the exact `provider/model` ID.
+
+Claude via the Anthropic API:
+
+```text
+/opencode/review-anthropic/claude-sonnet-4-5 focus on API compatibility
+/opencode/review-anthropic/claude-opus-4-5 focus on deep correctness
+```
+
+Gemini via the Gemini API in OpenCode's `google` provider:
+
+```text
+/opencode/review-google/gemini-3.1-pro-preview focus on integration risks
+/opencode/review-google/gemini-2.5-pro focus on missing tests
+```
+
+For the bridge script, exact IDs work the same way:
+
+```bash
+python3 plugins/opencode/scripts/opencode-review \
+  --cwd "$PWD" \
+  --model anthropic/claude-sonnet-4-5 \
+  "review API compatibility"
+```
+
+If you have a local custom model ID that OpenCode can run but does not list, use
+`--skip-model-check` with the direct script form.
 
 ## Non-Mutating Review Requests
 
@@ -81,12 +141,13 @@ If an alias matches multiple OpenCode models, add a preferred mapping:
 }
 ```
 
-The shipped defaults prefer:
+The shipped defaults prefer OpenCode Go:
 
 ```json
 {
-  "glm5.1": "opencode/glm-5.1",
-  "kimi-k.2.6": "opencode/kimi-k2.6"
+  "glm5.1": "opencode-go/glm-5.1",
+  "kimi-k.2.6": "opencode-go/kimi-k2.6",
+  "qwen3.7-plus": "opencode-go/qwen3.7-plus"
 }
 ```
 
