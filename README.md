@@ -1,3 +1,5 @@
+<img src="assets/opencode-codex-plugin.webp" alt="OpenCode and Codex plugin header" width="100%">
+
 # Codex OpenCode Plugin
 
 Run OpenCode model reviews from Codex using OpenCode's `plan` agent.
