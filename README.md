@@ -215,6 +215,23 @@ cd /path/to/codex
 git apply /path/to/codex-opencode/patches/codex-opencode-namespaced-slash.diff
 ```
 
+## Releases
+
+Releases are published with the `Release` GitHub Actions workflow. Run it from the GitHub Actions
+tab and choose a SemVer bump:
+
+- `patch`: `0.1.0` -> `0.1.1`
+- `minor`: `0.1.0` -> `0.2.0`
+- `major`: `0.1.0` -> `1.0.0`
+
+You can also provide an exact `version` such as `0.3.0`. The workflow strips local Codex
+cachebuster metadata, updates `plugins/opencode/.codex-plugin/plugin.json`, commits
+`Release vX.Y.Z`, creates tag `vX.Y.Z`, pushes it, and creates the GitHub release.
+
+The repository must allow GitHub Actions to write to contents. In GitHub, check
+`Settings -> Actions -> General -> Workflow permissions` and allow read/write if the release
+workflow cannot push the version commit or tag.
+
 ## Development
 
 Run tests:
