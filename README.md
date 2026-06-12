@@ -19,6 +19,17 @@ codex plugin marketplace add "$PWD"
 codex plugin add opencode@codex-opencode
 ```
 
+Or tell your clanker to clone this repo and install it for you:
+
+```text
+Clone https://github.com/sambitcreate/opencode-review-for-codex, then from the cloned repo run:
+
+codex plugin marketplace add "$PWD"
+codex plugin add opencode@codex-opencode
+
+After installing, remind me to open a new Codex thread so the plugin is loaded.
+```
+
 Open a new Codex thread after installing so the skill is loaded.
 
 ## Requirements
