@@ -53,6 +53,14 @@ class ReviewOptions:
 
 
 @dataclass(frozen=True)
+class ReviewOutput:
+    """Parsed OpenCode run output: review text plus any captured error events."""
+
+    text: str
+    error: str | None
+
+
+@dataclass(frozen=True)
 class ModelConfig:
     aliases: dict[str, list[str]]
     preferred: dict[str, str]
@@ -235,6 +243,7 @@ def run_subprocess(
             process = subprocess.Popen(
                 list(command),
                 cwd=str(cwd) if cwd else None,
+                stdin=subprocess.DEVNULL,
                 stdout=stdout_file,
                 stderr=stderr_file,
             )
@@ -402,8 +411,16 @@ def build_review_prompt(cwd: Path, focus: str, subagents: int | None = None) -> 
     )
 
 
-def extract_review_text(stdout: str) -> str:
+def extract_review_text(stdout: str) -> ReviewOutput:
+    """Parse newline-delimited OpenCode JSON events into review text.
+
+    OpenCode emits several event types on stdout (text, tool_use, step_*,
+    error, ...). Only `type == "text"` events carry the review; `type ==
+    "error"` events carry failure detail that we surface instead of reporting
+    a generic "no review text" message. Other event types are ignored.
+    """
     chunks: list[str] = []
+    error: str | None = None
     saw_json = False
     for line in stdout.splitlines():
         stripped = line.strip()
@@ -414,7 +431,13 @@ def extract_review_text(stdout: str) -> str:
         except json.JSONDecodeError:
             continue
         saw_json = True
-        if event.get("type") != "text":
+        event_type = event.get("type")
+        if event_type == "error":
+            message = _extract_error_message(event)
+            if message and message.strip():
+                error = (error + "\n" + message) if error else message
+            continue
+        if event_type != "text":
             continue
         part = event.get("part")
         if isinstance(part, dict):
@@ -423,8 +446,23 @@ def extract_review_text(stdout: str) -> str:
                 chunks.append(text.strip())
 
     if chunks:
-        return "\n\n".join(chunks).strip()
-    return "" if saw_json else stdout.strip()
+        return ReviewOutput(text="\n\n".join(chunks).strip(), error=error)
+    return ReviewOutput(text="" if saw_json else stdout.strip(), error=error)
+
+
+def _extract_error_message(event: object) -> str:
+    """Best-effort extraction of a human-readable message from an error event."""
+    if not isinstance(event, dict):
+        return ""
+    for key in ("message", "error"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            inner = value.get("message")
+            if isinstance(inner, str) and inner.strip():
+                return inner.strip()
+    return truncate_text(json.dumps(event, ensure_ascii=False))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -558,9 +596,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise BridgeError(f"`opencode run` failed with exit code {result.returncode}: {details}")
 
         review = extract_review_text(result.stdout)
-        if not review:
+        if not review.text:
+            if review.error:
+                raise BridgeError(f"OpenCode reported an error: {review.error}")
             raise BridgeError("OpenCode completed without returning review text.")
-        print(review)
+        if review.error:
+            print(f"opencode-review: OpenCode reported an error: {review.error}", file=sys.stderr)
+        print(review.text)
         return 0
     except BridgeError as error:
         print(f"opencode-review: {error}", file=sys.stderr)
