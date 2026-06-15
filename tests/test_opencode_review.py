@@ -149,17 +149,46 @@ class OutputParsingTests(unittest.TestCase):
     def test_extracts_text_events(self):
         lines = [
             {"type": "tool_use", "part": {"tool": "bash"}},
+            {"type": "step_start", "part": {}},
             {"type": "text", "part": {"text": "Finding one."}},
             {"type": "text", "part": {"text": "Finding two."}},
         ]
         stdout = "\n".join(json.dumps(line) for line in lines)
-        self.assertEqual(
-            review.extract_review_text(stdout),
-            "Finding one.\n\nFinding two.",
-        )
+        output = review.extract_review_text(stdout)
+        self.assertEqual(output.text, "Finding one.\n\nFinding two.")
+        self.assertIsNone(output.error)
 
     def test_falls_back_to_plain_stdout(self):
-        self.assertEqual(review.extract_review_text("plain review"), "plain review")
+        output = review.extract_review_text("plain review")
+        self.assertEqual(output.text, "plain review")
+        self.assertIsNone(output.error)
+
+    def test_ignores_non_text_events_without_crashing(self):
+        # OpenCode also emits tool_use, step_start, step_finish, and reasoning
+        # events that have no `part.text`. The parser must skip them, not crash.
+        lines = [
+            {"type": "step_start", "part": {"id": "p1"}},
+            {"type": "tool_use", "part": {"tool": "bash"}},
+            {"type": "step_finish", "part": {"id": "p1"}},
+            {"type": "text", "part": {"text": "Only finding."}},
+        ]
+        stdout = "\n".join(json.dumps(line) for line in lines)
+        self.assertEqual(review.extract_review_text(stdout).text, "Only finding.")
+
+    def test_surfaces_error_event_when_no_text_returned(self):
+        lines = [
+            {"type": "step_start", "part": {}},
+            {"type": "error", "message": "model provider timed out"},
+        ]
+        stdout = "\n".join(json.dumps(line) for line in lines)
+        output = review.extract_review_text(stdout)
+        self.assertEqual(output.text, "")
+        self.assertEqual(output.error, "model provider timed out")
+
+    def test_surfaces_nested_error_event_message(self):
+        lines = [{"type": "error", "error": {"message": "rate limited"}}]
+        stdout = "\n".join(json.dumps(line) for line in lines)
+        self.assertEqual(review.extract_review_text(stdout).error, "rate limited")
 
 
 class CliBoundaryTests(unittest.TestCase):
@@ -265,6 +294,22 @@ class CliBoundaryTests(unittest.TestCase):
         progress = stderr.getvalue()
         self.assertIn("started", progress)
         self.assertIn("still running after", progress)
+
+    def test_run_subprocess_closes_stdin_to_avoid_hang(self):
+        # OpenCode's `run` appends stdin to the prompt when it is not a TTY
+        # (packages/opencode/src/cli/cmd/run.ts), so the bridge must give the
+        # child an immediate EOF on stdin. A child that blocks reading stdin
+        # should therefore finish promptly instead of hanging until timeout.
+        result = review.run_subprocess(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.write(sys.stdin.read() or 'no-stdin')",
+            ],
+            cwd=ROOT,
+            timeout=2,
+        )
+        self.assertEqual(result.stdout, "no-stdin")
 
     def test_cwd_must_be_directory(self):
         stderr = StringIO()
