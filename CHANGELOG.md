@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Nothing yet.
+
+## [0.2.0] - 2026-07-04
+
+### Added
 - CI workflow (`.github/workflows/ci.yml`) that runs the unit-test suite and
   plugin validation on every push and pull request to `main`.
 - `CHANGELOG.md` to track release history.
