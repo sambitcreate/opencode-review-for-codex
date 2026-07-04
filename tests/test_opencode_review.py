@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 import unittest
 from io import StringIO
@@ -149,17 +150,46 @@ class OutputParsingTests(unittest.TestCase):
     def test_extracts_text_events(self):
         lines = [
             {"type": "tool_use", "part": {"tool": "bash"}},
+            {"type": "step_start", "part": {}},
             {"type": "text", "part": {"text": "Finding one."}},
             {"type": "text", "part": {"text": "Finding two."}},
         ]
         stdout = "\n".join(json.dumps(line) for line in lines)
-        self.assertEqual(
-            review.extract_review_text(stdout),
-            "Finding one.\n\nFinding two.",
-        )
+        output = review.extract_review_text(stdout)
+        self.assertEqual(output.text, "Finding one.\n\nFinding two.")
+        self.assertIsNone(output.error)
 
     def test_falls_back_to_plain_stdout(self):
-        self.assertEqual(review.extract_review_text("plain review"), "plain review")
+        output = review.extract_review_text("plain review")
+        self.assertEqual(output.text, "plain review")
+        self.assertIsNone(output.error)
+
+    def test_ignores_non_text_events_without_crashing(self):
+        # OpenCode also emits tool_use, step_start, step_finish, and reasoning
+        # events that have no `part.text`. The parser must skip them, not crash.
+        lines = [
+            {"type": "step_start", "part": {"id": "p1"}},
+            {"type": "tool_use", "part": {"tool": "bash"}},
+            {"type": "step_finish", "part": {"id": "p1"}},
+            {"type": "text", "part": {"text": "Only finding."}},
+        ]
+        stdout = "\n".join(json.dumps(line) for line in lines)
+        self.assertEqual(review.extract_review_text(stdout).text, "Only finding.")
+
+    def test_surfaces_error_event_when_no_text_returned(self):
+        lines = [
+            {"type": "step_start", "part": {}},
+            {"type": "error", "message": "model provider timed out"},
+        ]
+        stdout = "\n".join(json.dumps(line) for line in lines)
+        output = review.extract_review_text(stdout)
+        self.assertEqual(output.text, "")
+        self.assertEqual(output.error, "model provider timed out")
+
+    def test_surfaces_nested_error_event_message(self):
+        lines = [{"type": "error", "error": {"message": "rate limited"}}]
+        stdout = "\n".join(json.dumps(line) for line in lines)
+        self.assertEqual(review.extract_review_text(stdout).error, "rate limited")
 
 
 class CliBoundaryTests(unittest.TestCase):
@@ -266,6 +296,22 @@ class CliBoundaryTests(unittest.TestCase):
         self.assertIn("started", progress)
         self.assertIn("still running after", progress)
 
+    def test_run_subprocess_closes_stdin_to_avoid_hang(self):
+        # OpenCode's `run` appends stdin to the prompt when it is not a TTY
+        # (packages/opencode/src/cli/cmd/run.ts), so the bridge must give the
+        # child an immediate EOF on stdin. A child that blocks reading stdin
+        # should therefore finish promptly instead of hanging until timeout.
+        result = review.run_subprocess(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.write(sys.stdin.read() or 'no-stdin')",
+            ],
+            cwd=ROOT,
+            timeout=2,
+        )
+        self.assertEqual(result.stdout, "no-stdin")
+
     def test_cwd_must_be_directory(self):
         stderr = StringIO()
         with patch("sys.stderr", stderr):
@@ -282,6 +328,169 @@ class CliBoundaryTests(unittest.TestCase):
                 )
         self.assertEqual(error.exception.code, 2)
         self.assertIn("--cwd must be a directory", stderr.getvalue())
+
+
+class CliPathCoverageTests(unittest.TestCase):
+    """Cover user-facing CLI paths the original suite did not exercise."""
+
+    def test_list_models_prints_available_models_and_exits_zero(self):
+        stdout = StringIO()
+        with (
+            patch("opencode_review.find_opencode_command", return_value=["/bin/opencode"]),
+            patch(
+                "opencode_review.list_models",
+                return_value=["opencode/glm-5.1", "opencode/kimi-k2.6"],
+            ),
+            patch("sys.stdout", stdout),
+        ):
+            code = review.main(["--cwd", str(ROOT), "--list-models"])
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.getvalue().splitlines(), ["opencode/glm-5.1", "opencode/kimi-k2.6"])
+
+    def test_skip_model_check_passes_exact_provider_model_through(self):
+        stdout = StringIO()
+        with (
+            patch("opencode_review.list_models") as list_models,
+            patch("opencode_review.shutil.which", return_value="/bin/opencode"),
+            patch("sys.stdout", stdout),
+        ):
+            code = review.main(
+                [
+                    "--cwd",
+                    str(ROOT),
+                    "--model",
+                    "anthropic/claude-sonnet-4-5",
+                    "--skip-model-check",
+                    "--print-command",
+                ]
+            )
+        self.assertEqual(code, 0)
+        list_models.assert_not_called()  # --skip-model-check must bypass model discovery
+        self.assertIn("--model anthropic/claude-sonnet-4-5", stdout.getvalue())
+
+    def test_skip_model_check_rejects_alias_without_provider(self):
+        stderr = StringIO()
+        with (
+            patch("opencode_review.shutil.which", return_value="/bin/opencode"),
+            patch("sys.stderr", stderr),
+        ):
+            code = review.main(
+                [
+                    "--cwd",
+                    str(ROOT),
+                    "--model",
+                    "glm5.1",  # no provider/ -> ambiguous under --skip-model-check
+                    "--skip-model-check",
+                    "--print-command",
+                ]
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("exact provider/model ID", stderr.getvalue())
+
+    def test_variant_flag_is_appended_to_command(self):
+        stdout = StringIO()
+        with (
+            patch("opencode_review.list_models", return_value=["opencode/glm-5.1"]),
+            patch("opencode_review.shutil.which", return_value="/bin/opencode"),
+            patch("sys.stdout", stdout),
+        ):
+            code = review.main(
+                [
+                    "--cwd",
+                    str(ROOT),
+                    "--model",
+                    "opencode/glm-5.1",
+                    "--variant",
+                    "high",
+                    "--skip-model-check",
+                    "--print-command",
+                ]
+            )
+        self.assertEqual(code, 0)
+        self.assertIn("--variant high", stdout.getvalue())
+
+    def test_bridge_error_surfaces_as_exit_code_one(self):
+        stderr = StringIO()
+        with (
+            patch("opencode_review.find_opencode_command", side_effect=review.BridgeError("nope")),
+            patch("sys.stderr", stderr),
+        ):
+            code = review.main(["--cwd", str(ROOT), "--list-models"])
+        self.assertEqual(code, 1)
+        self.assertIn("nope", stderr.getvalue())
+
+    def test_invalid_slash_command_raises_bridge_error(self):
+        with self.assertRaises(review.BridgeError):
+            review.parse_slash_review("/not-opencode/review-glm5.1")
+
+    def test_extract_review_text_keeps_text_and_surfaces_error(self):
+        lines = [
+            {"type": "text", "part": {"text": "Finding one."}},
+            {"type": "error", "message": "partial provider failure"},
+        ]
+        stdout = "\n".join(json.dumps(line) for line in lines)
+        output = review.extract_review_text(stdout)
+        self.assertEqual(output.text, "Finding one.")
+        self.assertEqual(output.error, "partial provider failure")
+
+
+class ModelListHardeningTests(unittest.TestCase):
+    def test_list_models_strips_ansi_and_ignores_non_model_lines(self):
+        raw_stdout = (
+            "\x1b[1mMODEL\x1b[0m\n"
+            "  opencode/glm-5.1   \n"
+            "  opencode/kimi-k2.6\n"
+            "some free-form note\n"
+            "header/with space\n"
+        )
+        completed = subprocess.CompletedProcess(
+            args=["opencode", "models"], returncode=0, stdout=raw_stdout, stderr=""
+        )
+        with patch("opencode_review.run_subprocess", return_value=completed):
+            models = review.list_models(["opencode"], ROOT, 5)
+        self.assertEqual(models, ["opencode/glm-5.1", "opencode/kimi-k2.6"])
+
+    def test_split_model_rejects_missing_provider_or_id(self):
+        with self.assertRaises(review.ModelResolutionError):
+            review.split_model("no-slash")
+        with self.assertRaises(review.ModelResolutionError):
+            review.split_model("/leading-slash")
+        with self.assertRaises(review.ModelResolutionError):
+            review.split_model("trailing-slash/")
+
+
+class FindOpencodeCommandTests(unittest.TestCase):
+    def test_explicit_argument_wins(self):
+        self.assertEqual(
+            review.find_opencode_command("/custom/opencode --flag"),
+            ["/custom/opencode", "--flag"],
+        )
+
+    def test_opencode_bin_env_is_used_when_no_explicit_arg(self):
+        environ = {"OPENCODE_BIN": "/env/opencode"}
+        with patch("opencode_review.os.environ", environ), patch(
+            "opencode_review.shutil.which", return_value=None
+        ):
+            self.assertEqual(review.find_opencode_command(), ["/env/opencode"])
+
+    def test_opencode_repo_env_builds_bun_command(self):
+        repo = ROOT  # any existing path
+        environ = {"OPENCODE_REPO": str(repo)}
+        with patch("opencode_review.os.environ", environ), patch(
+            "opencode_review.shutil.which", return_value=None
+        ):
+            command = review.find_opencode_command()
+        self.assertEqual(command[:3], ["bun", "run", "--cwd"])
+        self.assertIn("packages/opencode", command[3])
+
+    def test_missing_command_raises_user_facing_error(self):
+        environ = {}
+        with patch("opencode_review.os.environ", environ), patch(
+            "opencode_review.shutil.which", return_value=None
+        ):
+            with self.assertRaises(review.BridgeError) as error:
+                review.find_opencode_command()
+        self.assertIn("OpenCode CLI was not found", str(error.exception))
 
 
 if __name__ == "__main__":

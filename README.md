@@ -284,3 +284,21 @@ Validate the plugin manifest:
 ```bash
 python3 scripts/validate_plugin.py plugins/opencode
 ```
+
+### Continuous integration
+
+The [CI workflow](.github/workflows/ci.yml) runs the test suite and plugin
+validation on every push and pull request to `main`. The
+[Release workflow](.github/workflows/release.yml) is described under
+[Releases](#releases).
+
+Notable changes for each release are recorded in [CHANGELOG.md](CHANGELOG.md).
+
+### Review process safety
+
+The bridge runs the OpenCode child in its own process session and tears the
+whole process group down (SIGTERM then SIGKILL) on timeout, output overflow, or
+`Ctrl-C`, so cancelling a long review does not orphan agent or model processes.
+A non-zero exit still prints any review text captured before the failure, and
+`Ctrl-C` exits with code 130.
+

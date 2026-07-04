@@ -1,29 +1,43 @@
 diff --git a/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs b/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
 --- a/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
 +++ b/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
-@@
- pub(super) struct SlashInput<'a> {
-@@
+@@ -47,6 +47,12 @@
+     service_tier_commands: &'a [ServiceTierCommand],
  }
-+
+ 
 +fn is_plugin_namespaced_slash(name: &str) -> bool {
++    // Plugin namespaced slash commands use a `:` separator (for example
++    // `/opencode:review-...`) and should pass through as normal prompts.
 +    name.contains(':')
 +}
- 
++
  impl<'a> SlashInput<'a> {
-@@
+     pub(super) fn new(
+         enabled: bool,
+@@ -76,7 +82,7 @@
+         let Some((name, _rest, _rest_offset)) = parse_slash_name(text) else {
+             return SubmissionValidation::Valid;
+         };
 -        if input_starts_with_space || name.contains('/') {
 +        if input_starts_with_space || name.contains('/') || is_plugin_namespaced_slash(name) {
              return SubmissionValidation::Valid;
          }
-@@
+         if self.command(name).is_some() {
+@@ -122,7 +128,16 @@
+     }
+ 
      pub(super) fn should_parse_on_dequeue(&self, text: &str) -> bool {
 -        self.enabled && !text.starts_with(' ') && text.trim().starts_with('/')
 +        if !self.enabled || text.starts_with(' ') || !text.trim().starts_with('/') {
 +            return false;
 +        }
++        // Plugin namespaced slash commands (for example `/opencode:review-...`)
++        // are submitted as normal prompts and must not be parsed as built-in
++        // slash commands.
 +        if let Some((name, _rest, _rest_offset)) = parse_slash_name(text) {
 +            return !name.contains('/') && !is_plugin_namespaced_slash(name);
 +        }
 +        true
      }
+ 
+     pub(super) fn command_element_range(
