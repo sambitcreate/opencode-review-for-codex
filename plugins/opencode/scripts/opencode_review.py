@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,9 @@ MIN_REVIEW_SUBAGENTS = 2
 MAX_REVIEW_SUBAGENTS = 8
 MAX_DIAGNOSTIC_CHARS = 4000
 MAX_OUTPUT_BYTES = 5_000_000
+PROCESS_GROUP_GRACE_SECONDS = 2
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+MODEL_LINE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._/-]*$")
 
 
 class BridgeError(RuntimeError):
@@ -232,62 +236,95 @@ def run_subprocess(
     def output_size(handle: BinaryIO) -> int:
         return os.fstat(handle.fileno()).st_size
 
-    def stop_process(process: subprocess.Popen) -> None:
+    def terminate_process_group(process: subprocess.Popen) -> None:
+        """Tear down the child and any descendants it spawned.
+
+        OpenCode ``run`` launches the plan agent and (with ``--subagents``)
+        further model/subagent processes. Killing only the direct child on a
+        timeout or interrupt would orphan those descendants, so the child is
+        started in its own session and we signal the whole group: SIGTERM
+        first (graceful), then SIGKILL after a short grace period.
+        """
         if process.poll() is not None:
             return
-        process.kill()
-        process.wait()
+        try:
+            pgid = os.getpgid(process.pid)
+        except (ProcessLookupError, PermissionError):
+            pgid = process.pid
+        for signum in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(pgid, signum)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                process.wait(timeout=PROCESS_GROUP_GRACE_SECONDS if signum == signal.SIGTERM else None)
+                return
+            except subprocess.TimeoutExpired:
+                continue
 
     with tempfile.TemporaryFile("w+b") as stdout_file, tempfile.TemporaryFile("w+b") as stderr_file:
         try:
+            # ``start_new_session=True`` puts the child (and its descendants)
+            # in a new process group so we can tear the whole tree down on
+            # timeout or interrupt instead of orphaning agent/model processes.
             process = subprocess.Popen(
                 list(command),
                 cwd=str(cwd) if cwd else None,
                 stdin=subprocess.DEVNULL,
                 stdout=stdout_file,
                 stderr=stderr_file,
+                start_new_session=True,
             )
         except OSError as error:
             raise BridgeError(f"Failed to start command: {rendered}: {error}") from error
 
-        if progress_label and progress_interval > 0:
-            print(f"opencode-review: {progress_label} started.", file=sys.stderr, flush=True)
+        # Let Ctrl-C reach this process so the operator can cancel a long
+        # review, then ensure the child group is always torn down in finally.
+        previous_int_handler = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        try:
+            if progress_label and progress_interval > 0:
+                print(f"opencode-review: {progress_label} started.", file=sys.stderr, flush=True)
 
-        while True:
-            stdout_len = output_size(stdout_file)
-            stderr_len = output_size(stderr_file)
-            if stdout_len > MAX_OUTPUT_BYTES or stderr_len > MAX_OUTPUT_BYTES:
-                stop_process(process)
-                raise BridgeError(
-                    "Command produced too much output "
-                    f"(stdout={stdout_len} bytes, stderr={stderr_len} bytes): {rendered}"
-                )
+            while True:
+                stdout_len = output_size(stdout_file)
+                stderr_len = output_size(stderr_file)
+                if stdout_len > MAX_OUTPUT_BYTES or stderr_len > MAX_OUTPUT_BYTES:
+                    raise BridgeError(
+                        "Command produced too much output "
+                        f"(stdout={stdout_len} bytes, stderr={stderr_len} bytes): {rendered}"
+                    )
 
-            returncode = process.poll()
-            if returncode is not None:
-                return subprocess.CompletedProcess(
-                    list(command),
-                    returncode,
-                    stdout=read_output(stdout_file),
-                    stderr=read_output(stderr_file),
-                )
+                returncode = process.poll()
+                if returncode is not None:
+                    return subprocess.CompletedProcess(
+                        list(command),
+                        returncode,
+                        stdout=read_output(stdout_file),
+                        stderr=read_output(stderr_file),
+                    )
 
-            if deadline is not None and time.monotonic() >= deadline:
-                stop_process(process)
-                raise BridgeError(f"Command timed out after {timeout}s: {rendered}")
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise BridgeError(f"Command timed out after {timeout}s: {rendered}")
 
-            now = time.monotonic()
-            if next_progress_at is not None and now >= next_progress_at:
-                elapsed = format_duration(now - started_at)
-                print(
-                    f"opencode-review: {progress_label}; still running after {elapsed} "
-                    f"(stdout={format_bytes(stdout_len)}, stderr={format_bytes(stderr_len)}).",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                next_progress_at = now + progress_interval
+                now = time.monotonic()
+                if next_progress_at is not None and now >= next_progress_at:
+                    elapsed = format_duration(now - started_at)
+                    print(
+                        f"opencode-review: {progress_label}; still running after {elapsed} "
+                        f"(stdout={format_bytes(stdout_len)}, stderr={format_bytes(stderr_len)}).",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    next_progress_at = now + progress_interval
 
-            time.sleep(poll_interval_seconds)
+                time.sleep(poll_interval_seconds)
+        finally:
+            # Always restore the caller's SIGINT handler and tear down the
+            # child group, whether the command succeeded, timed out,
+            # overflowed, or was interrupted by Ctrl-C.
+            signal.signal(signal.SIGINT, previous_int_handler)
+            terminate_process_group(process)
 
 
 def ensure_bounded_output(result: subprocess.CompletedProcess[str], command_name: str) -> None:
@@ -308,8 +345,12 @@ def list_models(opencode_command: Sequence[str], cwd: Path, timeout: int | float
         raise BridgeError(f"`opencode models` failed: {details}")
     models: list[str] = []
     for line in result.stdout.splitlines():
-        model = line.strip()
-        if model and "/" in model:
+        # `opencode models` output is plain text with no documented format,
+        # so strip ANSI decoration and keep only lines that look like a real
+        # `provider/model` ID. This avoids polluting the candidate set with
+        # header rows or color codes.
+        model = ANSI_ESCAPE_RE.sub("", line).strip()
+        if model and MODEL_LINE_RE.match(model):
             models.append(model)
     return sorted(set(models))
 
@@ -324,7 +365,11 @@ def alias_patterns(requested: str, config: ModelConfig) -> list[str]:
 
 
 def split_model(model: str) -> tuple[str, str]:
-    provider, model_id = model.split("/", 1)
+    provider, _, model_id = model.partition("/")
+    if not provider or not model_id:
+        raise ModelResolutionError(
+            f"Model `{model}` is not a valid provider/model ID."
+        )
     return provider, model_id
 
 
@@ -591,11 +636,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             progress_interval=args.progress_interval,
         )
         ensure_bounded_output(result, "opencode run")
-        if result.returncode != 0:
-            details = truncate_text((result.stderr or result.stdout).strip())
-            raise BridgeError(f"`opencode run` failed with exit code {result.returncode}: {details}")
-
         review = extract_review_text(result.stdout)
+
+        if result.returncode != 0:
+            # A long review can fail near the end and still have emitted
+            # useful findings. Print whatever review text we captured before
+            # reporting the failure, so the work is not silently discarded.
+            if review.text:
+                print(review.text)
+            details = truncate_text((result.stderr or result.stdout).strip())
+            error_suffix = f" OpenCode reported: {review.error}" if review.error else ""
+            raise BridgeError(
+                f"`opencode run` failed with exit code {result.returncode}: {details}{error_suffix}"
+            )
+
         if not review.text:
             if review.error:
                 raise BridgeError(f"OpenCode reported an error: {review.error}")
@@ -607,6 +661,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     except BridgeError as error:
         print(f"opencode-review: {error}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        # Operator cancelled the review. The child process group was already
+        # torn down inside run_subprocess; exit 130 is the conventional code
+        # for SIGINT cancellation.
+        print("opencode-review: interrupted.", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

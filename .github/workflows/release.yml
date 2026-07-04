@@ -65,8 +65,16 @@ jobs:
           BUMP: ${{ inputs.bump }}
           VERSION: ${{ inputs.version }}
         run: |
+          # Fetch existing tags first so we can tell whether the version
+          # currently on disk has already been released. This makes the
+          # auto-bump idempotent: if a previous run pushed its bump commit
+          # but failed before tagging, re-running reuses that unreleased
+          # version instead of bumping past it.
+          git fetch --tags origin
+
           node <<'NODE'
           const fs = require("fs")
+          const { execSync } = require("child_process")
 
           const manifestPath = "plugins/opencode/.codex-plugin/plugin.json"
           const bump = process.env.BUMP || "patch"
@@ -74,8 +82,14 @@ jobs:
           const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
           const current = String(manifest.version || "0.0.0").split("+")[0]
 
+          // Accept full SemVer (including prerelease/build metadata) so this
+          // regex agrees with scripts/validate_plugin.py SEMVER_RE.
+          const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
+          // For bump math we only compare the stable core.
+          const STABLE_RE = /^(\d+)\.(\d+)\.(\d+)/
+
           function parseVersion(value) {
-            const match = value.match(/^(\d+)\.(\d+)\.(\d+)$/)
+            const match = value.match(STABLE_RE)
             if (!match) {
               throw new Error(`Expected a SemVer version like 0.2.0, got ${value}`)
             }
@@ -83,7 +97,6 @@ jobs:
               major: Number(match[1]),
               minor: Number(match[2]),
               patch: Number(match[3]),
-              value,
             }
           }
 
@@ -94,36 +107,74 @@ jobs:
             return 0
           }
 
+          function tagExists(tag) {
+            try {
+              execSync(`git rev-parse -q --verify refs/tags/${tag}`, { stdio: "ignore" })
+              return true
+            } catch {
+              return false
+            }
+          }
+
+          function releaseExists(tag) {
+            try {
+              execSync(`gh release view ${tag}`, { stdio: "ignore" })
+              return true
+            } catch {
+              return false
+            }
+          }
+
           const parsedCurrent = parseVersion(current)
+
+          // Has the version currently on disk already been released?
+          // (tag and/or GitHub release for it exist.) Used below to make
+          // auto-bump retries idempotent.
+          const currentReleased = tagExists(`v${current}`) || releaseExists(`v${current}`)
+
           let next
           let changed = true
           if (requestedVersion) {
-            const parsedRequested = parseVersion(requestedVersion)
-            const comparison = compareVersions(parsedRequested, parsedCurrent)
+            if (!SEMVER_RE.test(requestedVersion)) {
+              throw new Error(`Requested version ${requestedVersion} is not valid SemVer`)
+            }
+            const comparison = compareVersions(parseVersion(requestedVersion), parsedCurrent)
             if (comparison < 0) {
               throw new Error(`Requested version ${requestedVersion} must be greater than or equal to ${current}`)
             }
             changed = comparison !== 0
             next = requestedVersion
           } else {
-            const nextParts = { ...parsedCurrent }
-            if (bump === "major") {
-              nextParts.major += 1
-              nextParts.minor = 0
-              nextParts.patch = 0
-            } else if (bump === "minor") {
-              nextParts.minor += 1
-              nextParts.patch = 0
-            } else if (bump === "patch") {
-              nextParts.patch += 1
+            // Auto-bump: only advance when the current version has already
+            // been released. If it has not (a prior run pushed the bump
+            // commit but failed before tagging), reuse it so retries do not
+            // silently skip a version.
+            if (currentReleased) {
+              const nextParts = { ...parsedCurrent }
+              if (bump === "major") {
+                nextParts.major += 1
+                nextParts.minor = 0
+                nextParts.patch = 0
+              } else if (bump === "minor") {
+                nextParts.minor += 1
+                nextParts.patch = 0
+              } else if (bump === "patch") {
+                nextParts.patch += 1
+              } else {
+                throw new Error(`Unsupported bump: ${bump}`)
+              }
+              next = `${nextParts.major}.${nextParts.minor}.${nextParts.patch}`
+              changed = true
             } else {
-              throw new Error(`Unsupported bump: ${bump}`)
+              next = current
+              changed = false
             }
-            next = `${nextParts.major}.${nextParts.minor}.${nextParts.patch}`
           }
 
-          manifest.version = next
-          fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+          if (changed) {
+            manifest.version = next
+            fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+          }
 
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${next}\n`)
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=v${next}\n`)
